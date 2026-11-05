@@ -383,6 +383,26 @@ fn draw_usage_detail(
     }
 }
 
+/// A window bar's trailing reset text, `  resets in 4d 2h (tue 10:00)` as
+/// [`reset_phrase`] words it, empty with no reset stamp. A weekly window whose
+/// reset has passed reads its last reset instead
+/// ([`super::format::last_reset_phrase`]) while `reset display` shows a clock:
+/// the countdown would read `resets in now` for as long as the reading stays
+/// frozen, weeks on a canceled or disabled account. A 5h window keeps the
+/// countdown: its reset names no slot that comes round again.
+fn reset_trailing(label: &str, window: &UsageWindow, now: i64, reset_fmt: ResetFmt) -> String {
+    let Some(secs) = reset_in_secs_at(window, now) else {
+        return String::new();
+    };
+    let last = (crate::usage::window_duration_secs(label) == Some(7 * 86_400))
+        .then(|| super::format::last_reset_phrase(now.saturating_add(secs), now, reset_fmt))
+        .flatten();
+    format!(
+        "  {}",
+        last.unwrap_or_else(|| reset_phrase(secs, reset_fmt))
+    )
+}
+
 /// The 5h / 7d(/ 7d fable) window bars both the codex and pool panes render:
 /// one trailing reset-countdown + `make_window_stat` per window, with both
 /// gates off. The panes differ only in which windows they pass, so the loop is
@@ -397,9 +417,7 @@ fn window_stats(
         let Some(window) = window else {
             continue;
         };
-        let trailing = reset_in_secs_at(window, now)
-            .map(|secs| format!("  {}", reset_phrase(secs, reset_fmt)))
-            .unwrap_or_default();
+        let trailing = reset_trailing(label, window, now, reset_fmt);
         stats.push(make_window_stat(
             label,
             window.utilization,
@@ -1115,9 +1133,7 @@ fn collect_stats(usage: &crate::usage::UsageInfo, reset_fmt: ResetFmt) -> Vec<St
         if usage.no_five_hour_limit && label == LABEL_5H {
             continue;
         }
-        let trailing = reset_in_secs_at(w, now_secs)
-            .map(|secs| format!("  {}", reset_phrase(secs, reset_fmt)))
-            .unwrap_or_default();
+        let trailing = reset_trailing(label, w, now_secs, reset_fmt);
         // Absolute $ figures on the eyebrow when the window carries them (null on
         // every current account; Claude Code itself drops these fields).
         let amount = usage

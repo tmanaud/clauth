@@ -1486,6 +1486,118 @@ fn header_lines_plan_dashes_when_no_tier_is_known() {
     );
 }
 
+/// The reset display a test renders under, off the two settings that word it.
+fn reset_fmt_of(
+    display: crate::profile::ResetDisplay,
+    clock: crate::profile::ClockFormat,
+) -> ResetFmt {
+    ResetFmt::from_state(&crate::profile::AppState {
+        reset_display: Some(display),
+        clock_format: Some(clock),
+        ..crate::profile::AppState::default()
+    })
+}
+
+fn window_resetting_at(utilization: f64, reset: i64) -> crate::usage::UsageWindow {
+    crate::usage::UsageWindow {
+        utilization,
+        resets_at: Some(crate::usage::epoch_secs_to_iso(reset)),
+    }
+}
+
+/// A canceled plan's account keeps its last reading's windows, since its
+/// `/usage` refuses every poll, as a disabled account keeps its cached one.
+/// Once the week's reset passes, its 7d bars read the last reset (weekday,
+/// minute and day) in place of a `resets in now` that would stand for weeks.
+/// The 5h bar keeps its countdown, and so does every bar under `relative`.
+#[test]
+fn a_frozen_weekly_bar_reads_its_last_reset_while_clocks_show() {
+    use crate::profile::{ClockFormat, ResetDisplay};
+    let now = crate::usage::now_epoch_secs();
+    let reset = now - 10 * 86_400;
+    let usage = crate::usage::UsageInfo {
+        plan: Some(crate::usage::PlanInfo {
+            tier: crate::usage::PlanTier::Free,
+            subscription_status: Some("canceled".to_string()),
+            ..Default::default()
+        }),
+        five_hour: Some(window_resetting_at(0.0, reset - 2 * 86_400)),
+        seven_day: Some(window_resetting_at(88.0, reset)),
+        weekly_scoped: vec![crate::usage::ScopedWindow {
+            label: "7d fable".to_string(),
+            window: window_resetting_at(27.0, reset),
+        }],
+        ..Default::default()
+    };
+    let trailings = |fmt: ResetFmt| -> Vec<(String, String)> {
+        collect_stats(&usage, fmt)
+            .into_iter()
+            .map(|s| (s.label, s.trailing))
+            .collect()
+    };
+    for (display, clock) in [
+        (ResetDisplay::Both, ClockFormat::H24),
+        (ResetDisplay::Clock, ClockFormat::H12),
+    ] {
+        let fmt = reset_fmt_of(display, clock);
+        let last =
+            super::super::format::last_reset_phrase(reset, now, fmt).expect("a passed reset reads");
+        assert!(last.starts_with("last reset "), "got {last:?}");
+        assert_eq!(
+            trailings(fmt),
+            vec![
+                ("5h".to_string(), "  resets in now".to_string()),
+                ("7d".to_string(), format!("  {last}")),
+                ("7d fable".to_string(), format!("  {last}")),
+            ]
+        );
+    }
+    let relative = reset_fmt_of(ResetDisplay::Relative, ClockFormat::H24);
+    assert!(
+        trailings(relative)
+            .iter()
+            .all(|(_, trailing)| trailing == "  resets in now"),
+        "relative keeps every countdown: {:?}",
+        trailings(relative)
+    );
+}
+
+/// A weekly reset still ahead keeps the countdown phrase, clock and all.
+#[test]
+fn a_live_weekly_bar_keeps_its_countdown() {
+    use crate::profile::{ClockFormat, ResetDisplay};
+    let usage = crate::usage::UsageInfo {
+        seven_day: Some(crate::usage::UsageWindow {
+            utilization: 40.0,
+            resets_at: Some(crate::testutil::countdown_reset_in(3 * 86_400 + 7_230)),
+        }),
+        ..Default::default()
+    };
+    let stats = collect_stats(&usage, reset_fmt_of(ResetDisplay::Both, ClockFormat::H24));
+    assert!(
+        stats[0].trailing.starts_with("  resets in 3d 2h ("),
+        "got {:?}",
+        stats[0].trailing
+    );
+}
+
+/// The codex and pool panes' bars follow the same rule: a passed 7d reset
+/// reads its last reset, a passed 5h one keeps its countdown.
+#[test]
+fn the_codex_and_pool_bars_read_a_passed_weekly_reset_the_same_way() {
+    use crate::profile::{ClockFormat, ResetDisplay};
+    let now = crate::usage::now_epoch_secs();
+    let reset = now - 2 * 86_400;
+    let five = window_resetting_at(10.0, reset);
+    let seven = window_resetting_at(50.0, reset);
+    let fmt = reset_fmt_of(ResetDisplay::Both, ClockFormat::H24);
+    let stats = window_stats(&[(LABEL_5H, Some(&five)), ("7d", Some(&seven))], fmt, now);
+    let last =
+        super::super::format::last_reset_phrase(reset, now, fmt).expect("a passed reset reads");
+    assert_eq!(stats[0].trailing, "  resets in now");
+    assert_eq!(stats[1].trailing, format!("  {last}"));
+}
+
 /// The `usage auto-start in …` countdown on the `plan` row, flush right: gray,
 /// shown for ANY account with `auto_start` on, queue toggle on or off (owner
 /// 2026-09-01 — the text moved off the Fallback card, then right onto the plan

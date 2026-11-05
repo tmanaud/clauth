@@ -430,6 +430,71 @@ fn clock_text_qualifies_the_day_by_distance() {
     );
 }
 
+/// A weekly window whose reset has passed reads its last reset: the weekday
+/// and minute it fell on, then the day, in either notation. The weekday stays
+/// at any distance, where `clock_text` trades it for the date or drops it on
+/// today's: it is the slot. A day more than half a year back names its year.
+#[test]
+fn last_reset_text_names_the_weekday_the_minute_and_the_day() {
+    let today = at(2030, 4, 10, 15, 0).date(); // a wednesday
+    assert_eq!(
+        last_reset_text(at(2030, 4, 5, 14, 0), today, ClockFormat::H24),
+        "last reset fri 14:00 (apr 5)"
+    );
+    assert_eq!(
+        last_reset_text(at(2030, 4, 5, 14, 0), today, ClockFormat::H12),
+        "last reset fri 2:00pm (apr 5)"
+    );
+    assert_eq!(
+        last_reset_text(at(2030, 4, 10, 9, 5), today, ClockFormat::H24),
+        "last reset wed 09:05 (apr 10)"
+    );
+    assert_eq!(
+        last_reset_text(at(2029, 9, 3, 9, 0), today, ClockFormat::H24),
+        "last reset mon 09:00 (sep 3, 2029)"
+    );
+}
+
+/// The last reset reads only once the reset has passed, and only while
+/// `reset display` shows a clock: `relative` keeps its countdown. `/usage`
+/// stamps a week's reset a fraction either side of its minute, so the phrase
+/// rounds to the nearest one: a stamp a second short of it and one 29 seconds
+/// past read the same, half a minute past reads the next. Compared against
+/// each other, never against a literal, so the box's timezone cannot move the
+/// answer.
+#[test]
+fn last_reset_phrase_needs_a_passed_reset_and_a_clock() {
+    let minute = 1_902_009_600 + 13 * 3600; // 2030-04-10, 13:00 UTC
+    let now = minute + 3 * 86_400;
+    let fmt = |display| ResetFmt {
+        display,
+        clock: ClockFormat::H24,
+    };
+    let both = fmt(ResetDisplay::Both);
+    let text = |reset: i64| last_reset_phrase(reset, now, both).expect("a passed reset reads");
+    assert!(text(minute).starts_with("last reset "));
+    assert_eq!(text(minute - 1), text(minute));
+    assert_eq!(text(minute + 29), text(minute));
+    assert_ne!(text(minute + 30), text(minute));
+    assert_eq!(
+        last_reset_phrase(minute, now, fmt(ResetDisplay::Clock)),
+        Some(text(minute))
+    );
+    assert_eq!(
+        last_reset_phrase(minute, now, fmt(ResetDisplay::Relative)),
+        None
+    );
+    assert_eq!(
+        last_reset_phrase(now + 60, now, both),
+        None,
+        "a reset ahead keeps its countdown"
+    );
+    assert!(
+        last_reset_phrase(now, now, both).is_some(),
+        "a reset at now has passed"
+    );
+}
+
 /// The countdown never disappears: an unresolvable stamp (or the setting off)
 /// falls back to it on every surface, in every mode.
 #[test]

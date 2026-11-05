@@ -1,7 +1,7 @@
 //! Shared formatters and style helpers used across multiple screens.
 //! Screen-only helpers stay in their own modules.
 
-use chrono::{DateTime, Datelike, Local, NaiveDateTime, Timelike, Weekday};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, Timelike, Weekday};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
@@ -541,14 +541,7 @@ fn local_naive(epoch: i64) -> Option<NaiveDateTime> {
 /// a caller with a countdown beside it passes [`Day::TimeOnly`]. Day 7 takes the
 /// date because a weekday that far out collides with today's own name.
 fn clock_text(target: NaiveDateTime, now: NaiveDateTime, fmt: ClockFormat, day: Day) -> String {
-    let time = match fmt {
-        ClockFormat::H24 => format!("{:02}:{:02}", target.hour(), target.minute()),
-        ClockFormat::H12 => {
-            let (pm, hour) = target.hour12();
-            let meridiem = if pm { "pm" } else { "am" };
-            format!("{hour}:{:02}{meridiem}", target.minute())
-        }
-    };
+    let time = clock_time(target, fmt);
     if day == Day::TimeOnly {
         return time;
     }
@@ -557,6 +550,58 @@ fn clock_text(target: NaiveDateTime, now: NaiveDateTime, fmt: ClockFormat, day: 
         1..=6 => format!("{} {time}", weekday_label(target.weekday())),
         _ => format!("{} {}, {time}", month_label(target.month()), target.day()),
     }
+}
+
+/// The time of day alone, in the operator's notation: `21:20` / `9:20pm`.
+fn clock_time(target: NaiveDateTime, fmt: ClockFormat) -> String {
+    match fmt {
+        ClockFormat::H24 => format!("{:02}:{:02}", target.hour(), target.minute()),
+        ClockFormat::H12 => {
+            let (pm, hour) = target.hour12();
+            let meridiem = if pm { "pm" } else { "am" };
+            format!("{hour}:{:02}{meridiem}", target.minute())
+        }
+    }
+}
+
+/// Usage-tab bar line for a weekly window whose reset has passed with no newer
+/// reading behind it, while `reset display` shows a clock: `last reset fri
+/// 14:00 (apr 5)`, the weekday, minute and day it fell on. A canceled plan's
+/// account and a disabled one keep that frozen reading for weeks, where the
+/// countdown would read `resets in now` all along, and the weekday and minute
+/// are what to compare accounts on when spreading their weekly resets across
+/// the week. Rounded to the nearest minute: `/usage` stamps a week's reset a
+/// fraction either side of its minute (`09:59:59.8`, then `10:00:00.7`).
+/// `None` while the reset is ahead, under `relative`, or when an instant does
+/// not resolve; the caller then keeps [`reset_phrase`].
+pub(super) fn last_reset_phrase(reset: i64, now: i64, fmt: ResetFmt) -> Option<String> {
+    if !fmt.shows_clock() || reset > now {
+        return None;
+    }
+    let minute = reset.checked_add(30)?.div_euclid(60).checked_mul(60)?;
+    Some(last_reset_text(
+        local_naive(minute)?,
+        local_naive(now)?.date(),
+        fmt.clock,
+    ))
+}
+
+/// [`last_reset_phrase`] over an already-resolved local instant, pure so its
+/// wording pins in any timezone. Unlike [`clock_text`], it keeps the weekday
+/// whatever the distance: the weekday and minute are the slot. A day more than
+/// half a year from `today` also names its year.
+fn last_reset_text(at: NaiveDateTime, today: NaiveDate, clock: ClockFormat) -> String {
+    let day = at.date();
+    let date = if (day - today).num_days().abs() > 183 {
+        format!("{} {}, {}", month_label(day.month()), day.day(), day.year())
+    } else {
+        format!("{} {}", month_label(day.month()), day.day())
+    };
+    format!(
+        "last reset {} {} ({date})",
+        weekday_label(at.weekday()),
+        clock_time(at, clock)
+    )
 }
 
 fn weekday_label(day: Weekday) -> &'static str {
